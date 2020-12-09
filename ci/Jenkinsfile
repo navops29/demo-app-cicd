@@ -1,0 +1,61 @@
+pipeline {
+	agent {
+		label app-worker
+	}
+	stages {
+		stage('Sonarqube') {
+		    environment {
+		        scannerHome = tool 'SonarQubeScanner'
+		    }
+		    steps {
+		        withSonarQubeEnv('sonarqube') {
+		            sh "${scannerHome}/bin/sonar-scanner"
+		        }
+		        timeout(time: 10, unit: 'MINUTES') {
+		            waitForQualityGate abortPipeline: true
+		        }
+		    }
+		}
+
+		stage('win-build'){
+			agent {
+				label app-builder-win
+			}
+			steps {
+				checkout scm
+				bat 'make app'
+				bat 'make tests'
+				stash includes: 'build/app/*', name: 'app'
+			}
+		}
+		stage('signing'){
+			steps {
+				unstash 'app'
+				// use a wrapper shell script for uploading
+				// files to signing server
+				sh "/opt/signing/signing-wrapper.sh app"
+				stash includes: "app", name: "signed-app"
+			}
+		}
+		stage('upload-to-artifactory'){
+			steps {
+				unstash 'signed-app'
+				rtUpload (
+                    serverId: ARTIFACTORY_ID,
+                    specPath: '/path/goes/here'
+                )
+			}
+		}
+		stage('ansible-qa'){
+			steps {
+				ansiblePlaybook(credentialsId: 'ansible_private_key', inventory: 'inventories/qa/hosts', playbook: 'app.yml')
+			}
+		}
+		stage('functional-testing'){
+			steps {...}
+		}
+		stage('publish'){
+			steps {...}
+		}
+	}
+}
