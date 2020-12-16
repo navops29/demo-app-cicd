@@ -25,7 +25,6 @@ pipeline {
                   def tagCommand = 'git describe --exact-match --tags HEAD'
                   def retCode = sh(script: tagCommand, returnStatus: true)
                   def tagExists = (retCode == 0)
-        
                   if (tagExists) {
                       env.TAG = sh(script: tagCommand, returnStdout: true).trim()
                       sh("echo ${env.TAG} >> VERSION")
@@ -44,7 +43,7 @@ pipeline {
 						node {
 							label win-builder
 						}
-					}								
+					}
 					stages {
 						stage('Build') {
 							steps {
@@ -56,7 +55,6 @@ pipeline {
 								bat 'conan build app/'
 								bat 'conan test app/'
 								stash includes: 'build/app/*', name: 'win-build'
-
 							}
 						}
 						stage('Package') {
@@ -81,13 +79,12 @@ pipeline {
 						}
 					}
 				}
-
 				stage ('MacOSX') {
 					agent {
 						node {
 							label macosx-builder
 						}
-					}								
+					}
 					stages {
 						stage('Build') {
 							steps {
@@ -99,7 +96,6 @@ pipeline {
 								sh 'conan build app/'
 								sh 'conan test app/'
 								stash includes: 'build/app/*', name: 'osx-build'
-
 							}
 						}
 						stage('Package') {
@@ -135,7 +131,6 @@ pipeline {
                     serverId: ARTIFACTORY_ID,
                     specPath: '/path/signed-win-pkg'
                 )
-
 			rtUpload (
                     serverId: ARTIFACTORY_ID,
                     specPath: '/path/signed-osx-pkg'
@@ -151,6 +146,13 @@ pipeline {
 			steps {...}
 		}
 		stage('Publish'){
+			// artifacts should be published
+			// only while building master branch
+		    when {
+		        expression {
+					return env.BRANCH_NAME == 'master'
+				}
+			}
 			steps {...}
 		}
 	}
