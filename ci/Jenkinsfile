@@ -1,6 +1,8 @@
 pipeline {
 	agent {
-		label app-worker
+		node {
+			label app-worker
+		}
 	}
 	stages {
 		stage('Sonarqube') {
@@ -16,33 +18,127 @@ pipeline {
 		        }
 		    }
 		}
-
-		stage('win-build'){
-			agent {
-				label app-builder-win
-			}
+		stage('Gather version info'){
 			steps {
-				checkout scm
-				bat 'make app'
-				bat 'make tests'
-				stash includes: 'build/app/*', name: 'app'
+				//identify version info from git tag
+			    script {
+                  def tagCommand = 'git describe --exact-match --tags HEAD'
+                  def retCode = sh(script: tagCommand, returnStatus: true)
+                  def tagExists = (retCode == 0)
+        
+                  if (tagExists) {
+                      env.TAG = sh(script: tagCommand, returnStdout: true).trim()
+                      sh("echo ${env.TAG} >> VERSION")
+                  } else {
+                      def dirtyTag = sh(script: 'git describe --tags --always HEAD', returnStdout: true).trim()
+                      sh("echo ${dirtyTag}-SNAPSHOT >> VERSION")
+                	}
+              	}
+				stash includes: 'VERSION', name: 'version'
 			}
 		}
-		stage('signing'){
-			steps {
-				unstash 'app'
-				// use a wrapper shell script for uploading
-				// files to signing server
-				sh "/opt/signing/signing-wrapper.sh app"
-				stash includes: "app", name: "signed-app"
+		stage('Multi-platform build'){
+			parallel {
+				stage ('Windows') {
+					agent {
+						node {
+							label win-builder
+						}
+					}								
+					stages {
+						stage('Build') {
+							steps {
+								checkout scm
+								unstash version
+								// we assume the build scripts
+								// use VERSION file to identify
+								// version of app
+								bat 'conan build app/'
+								bat 'conan test app/'
+								stash includes: 'build/app/*', name: 'win-build'
+
+							}
+						}
+						stage('Package') {
+							steps {
+								unstash 'version'
+								unstash 'win-build'
+								// a python script that calls
+								// reads version from the VERSION file
+								// and creates platform specific package
+								bat 'python create-package.py'
+								stash includes: 'package/*', name: 'win-pkg'
+							}
+						}
+						stage('Sign') {
+							steps {
+								unstash: 'win-pkg'
+								// use a wrapper script for uploading
+								// files to signing server
+								bat 'python sign-app.py win-pkg/'
+								stash includes: 'signed-win-pkg/*', name: 'signed-win-pkg'
+							}
+						}
+					}
+				}
+
+				stage ('MacOSX') {
+					agent {
+						node {
+							label macosx-builder
+						}
+					}								
+					stages {
+						stage('Build') {
+							steps {
+								checkout scm
+								unstash version
+								// we assume the build scripts
+								// use VERSION file to identify
+								// version of app
+								sh 'conan build app/'
+								sh 'conan test app/'
+								stash includes: 'build/app/*', name: 'osx-build'
+
+							}
+						}
+						stage('Package') {
+							steps {
+								unstash 'version'
+								unstash 'osx-build'
+								// a python script that calls
+								// reads version from the VERSION file
+								// and creates platform specific package
+								sh 'python create-package.py'
+								stash includes: 'package/*', name: 'osx-pkg'
+							}
+						}
+						stage('Sign & Notarize') {
+							steps {
+								unstash: 'osx-pkg'
+								// use a wrapper script for uploading
+								// files to signing server and notarize
+								// the app
+								sh 'python sign-app.py osx-pkg/'
+								stash includes: 'signed-osx-pkg/*', name: 'signed-osx-pkg'
+							}
+						}
+					}
+				}
 			}
 		}
 		stage('upload-to-artifactory'){
 			steps {
-				unstash 'signed-app'
-				rtUpload (
+				unstash 'signed-win-pkg'
+				unstash 'signed-osx-pkg'
+			rtUpload (
                     serverId: ARTIFACTORY_ID,
-                    specPath: '/path/goes/here'
+                    specPath: '/path/signed-win-pkg'
+                )
+
+			rtUpload (
+                    serverId: ARTIFACTORY_ID,
+                    specPath: '/path/signed-osx-pkg'
                 )
 			}
 		}
@@ -51,10 +147,10 @@ pipeline {
 				ansiblePlaybook(credentialsId: 'ansible_private_key', inventory: 'inventories/qa/hosts', playbook: 'app.yml')
 			}
 		}
-		stage('functional-testing'){
+		stage('Functional Testing'){
 			steps {...}
 		}
-		stage('publish'){
+		stage('Publish'){
 			steps {...}
 		}
 	}
