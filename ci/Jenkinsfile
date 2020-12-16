@@ -123,7 +123,7 @@ pipeline {
 				}
 			}
 		}
-		stage('upload-to-artifactory'){
+		stage('Upload Artifactory'){
 			steps {
 				unstash 'signed-win-pkg'
 				unstash 'signed-osx-pkg'
@@ -137,7 +137,7 @@ pipeline {
                 )
 			}
 		}
-		stage('ansible-qa'){
+		stage('Deploy to QA'){
 			steps {
 				ansiblePlaybook(credentialsId: 'ansible_private_key', inventory: 'inventories/qa/hosts', playbook: 'app.yml')
 			}
